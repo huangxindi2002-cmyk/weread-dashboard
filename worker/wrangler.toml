@@ -1,0 +1,6 @@
+name = "weread-dashboard"
+main = "src/index.js"
+compatibility_date = "2026-05-19"
+
+[vars]
+ALLOWED_ORIGINS = "https://huangxindi2002-cmyk.github.io"

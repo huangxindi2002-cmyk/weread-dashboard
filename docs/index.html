@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>我的微信读书 · 阅读仪表盘</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📖</span>
+      <h1>我的阅读仪表盘</h1>
+    </div>
+    <div class="topbar-actions">
+      <span id="last-updated" class="muted"></span>
+      <button id="refresh-btn" class="btn">刷新数据</button>
+      <button id="settings-btn" class="btn btn-ghost" title="设置 Worker 地址">⚙</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Initial empty / loading state -->
+    <section id="empty-state" class="empty-state">
+      <p>还没有数据。点击右上角「刷新数据」从微信读书拉取。</p>
+    </section>
+
+    <!-- Overview stats -->
+    <section id="overview" class="overview hidden">
+      <div class="stat-card">
+        <div class="stat-label">今年阅读时长</div>
+        <div class="stat-value" id="stat-total-time">—</div>
+        <div class="stat-sub" id="stat-total-time-sub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">阅读天数</div>
+        <div class="stat-value" id="stat-days">—</div>
+        <div class="stat-sub" id="stat-days-sub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">读过 / 读完</div>
+        <div class="stat-value" id="stat-books">—</div>
+        <div class="stat-sub" id="stat-books-sub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">日均时长</div>
+        <div class="stat-value" id="stat-avg">—</div>
+        <div class="stat-sub" id="stat-avg-sub"></div>
+      </div>
+    </section>
+
+    <!-- Year heatmap -->
+    <section id="heatmap-section" class="card hidden">
+      <div class="card-header">
+        <h2>全年阅读热力图</h2>
+        <span class="muted" id="heatmap-year-label"></span>
+      </div>
+      <div id="heatmap" class="heatmap"></div>
+      <div class="heatmap-legend">
+        <span class="muted">少</span>
+        <span class="hm-cell hm-l0"></span>
+        <span class="hm-cell hm-l1"></span>
+        <span class="hm-cell hm-l2"></span>
+        <span class="hm-cell hm-l3"></span>
+        <span class="hm-cell hm-l4"></span>
+        <span class="muted">多</span>
+      </div>
+    </section>
+
+    <div class="two-col">
+      <!-- Currently reading -->
+      <section id="current-book-section" class="card hidden">
+        <div class="card-header"><h2>正在读</h2></div>
+        <div id="current-book" class="current-book"></div>
+      </section>
+
+      <!-- Top books this year -->
+      <section id="top-books-section" class="card hidden">
+        <div class="card-header"><h2>今年读得最多</h2></div>
+        <ol id="top-books" class="top-books"></ol>
+      </section>
+    </div>
+
+    <!-- Recent highlights timeline -->
+    <section id="highlights-section" class="card hidden">
+      <div class="card-header">
+        <h2>最近划线</h2>
+        <span class="muted" id="highlights-book-label"></span>
+      </div>
+      <ul id="highlights" class="highlights"></ul>
+    </section>
+
+    <!-- Recent notebooks -->
+    <section id="notebooks-section" class="card hidden">
+      <div class="card-header">
+        <h2>最近做笔记的书</h2>
+        <span class="muted" id="notebooks-total"></span>
+      </div>
+      <div id="notebooks" class="notebooks"></div>
+    </section>
+
+    <!-- Preferences -->
+    <section id="prefer-section" class="card hidden">
+      <div class="card-header"><h2>偏好阅读分类</h2></div>
+      <div id="prefer-category" class="prefer-category"></div>
+    </section>
+  </main>
+
+  <!-- Chat fab -->
+  <button id="chat-fab" class="chat-fab" title="问问 AI">💬</button>
+
+  <!-- Chat drawer -->
+  <aside id="chat-drawer" class="chat-drawer hidden">
+    <header class="chat-header">
+      <h3>问问我的读书 AI</h3>
+      <div>
+        <button id="chat-clear" class="btn btn-ghost" title="清空对话">清空</button>
+        <button id="chat-close" class="btn btn-ghost" title="关闭">✕</button>
+      </div>
+    </header>
+    <div id="chat-messages" class="chat-messages">
+      <div class="chat-tip">
+        <p>试试问我:</p>
+        <ul>
+          <li>我这周读了多久?</li>
+          <li>今年我读完了几本书?</li>
+          <li>把《苏东坡新传》里的最近划线给我</li>
+          <li>给我推荐一本类似《万寿寺》的书</li>
+        </ul>
+      </div>
+    </div>
+    <form id="chat-form" class="chat-input">
+      <textarea id="chat-input" placeholder="问点什么...(Enter 发送, Shift+Enter 换行)" rows="2"></textarea>
+      <button type="submit" id="chat-send" class="btn btn-primary">发送</button>
+    </form>
+  </aside>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content">
+      <h3>设置</h3>
+      <label>
+        Worker API 地址
+        <input type="text" id="setting-api-base" placeholder="https://weread-dashboard.your-account.workers.dev" />
+      </label>
+      <p class="muted">部署 Worker 后把它的地址填进来。本地调试可填 http://localhost:8787</p>
+      <div class="modal-actions">
+        <button id="setting-save" class="btn btn-primary">保存</button>
+        <button id="setting-cancel" class="btn">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

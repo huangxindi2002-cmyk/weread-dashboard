@@ -94,9 +94,19 @@
     <section id="notebooks-section" class="card hidden">
       <div class="card-header">
         <h2>最近做笔记的书</h2>
-        <span class="muted" id="notebooks-total"></span>
+        <span class="muted">点击查看「你对这本书的理解」</span>
       </div>
       <div id="notebooks" class="notebooks"></div>
+      <div class="muted" id="notebooks-total" style="margin-top:8px"></div>
+    </section>
+
+    <!-- Unfinished books -->
+    <section id="unfinished-section" class="card hidden">
+      <div class="card-header">
+        <h2>没读完的</h2>
+        <span class="muted">点击查看「阅读足迹」与可能的原因</span>
+      </div>
+      <div id="unfinished" class="notebooks"></div>
     </section>
 
     <!-- Preferences -->
@@ -134,6 +144,27 @@
       <button type="submit" id="chat-send" class="btn btn-primary">发送</button>
     </form>
   </aside>
+
+  <!-- Book detail modal -->
+  <div id="book-modal" class="modal hidden">
+    <div class="modal-content book-modal-content">
+      <header class="book-modal-header">
+        <img id="book-modal-cover" alt="" />
+        <div class="book-modal-meta">
+          <h3 id="book-modal-title"></h3>
+          <div id="book-modal-author" class="muted"></div>
+          <div id="book-modal-stats" class="muted"></div>
+          <a id="book-modal-open" class="muted" target="_blank" style="font-size:11px">📖 在 App 中打开</a>
+        </div>
+        <button id="book-modal-close" class="btn btn-ghost" title="关闭">✕</button>
+      </header>
+      <nav class="book-modal-tabs">
+        <button class="book-tab" data-tab="summary">你对这本书的理解</button>
+        <button class="book-tab" data-tab="footprint">阅读足迹</button>
+      </nav>
+      <div id="book-modal-body" class="book-modal-body"></div>
+    </div>
+  </div>
 
   <!-- Settings modal -->
   <div id="settings-modal" class="modal hidden">

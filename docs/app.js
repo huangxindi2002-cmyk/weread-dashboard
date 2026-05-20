@@ -134,9 +134,9 @@ function render(data) {
     const prog = cb.progress || {};
     const progPct = prog.progress || 0;
     $("current-book").innerHTML = `
-      <img src="${escapeHtml(cb.cover || "")}" alt="" onerror="this.style.opacity=0" />
+      <img src="${escapeHtml(cb.cover || "")}" alt="" data-book-id="${escapeHtml(cb.bookId)}" data-book-tab="summary" style="cursor:pointer" title="点击查看你对这本书的理解" onerror="this.style.opacity=0" />
       <div>
-        <h3>${escapeHtml(cb.title || "")}</h3>
+        <h3 data-book-id="${escapeHtml(cb.bookId)}" data-book-tab="summary" title="点击查看你对这本书的理解">${escapeHtml(cb.title || "")}</h3>
         <div class="meta">${escapeHtml(cb.author || "")} · ${escapeHtml(cb.category || "")}</div>
         ${prog.chapterTitle ? `<div class="meta">读到: ${escapeHtml(prog.chapterTitle)}</div>` : ""}
         <div class="meta">上次阅读 ${fmtRelative(cb.readUpdateTime)}</div>
@@ -153,7 +153,7 @@ function render(data) {
   if (ys.readLongest && ys.readLongest.length) {
     show($("top-books-section"));
     $("top-books").innerHTML = ys.readLongest.map((b, i) => `
-      <li>
+      <li data-book-id="${escapeHtml(b.bookId || "")}" data-book-tab="summary" title="点击查看你对这本书的理解">
         <span class="rank">${i + 1}</span>
         <span>
           <div>${escapeHtml(b.title || "")}</div>
@@ -192,14 +192,30 @@ function render(data) {
     const nb = data.notebooks;
     $("notebooks-total").textContent = `共 ${nb.totalBookCount} 本笔记书 / ${nb.totalNoteCount} 条笔记`;
     $("notebooks").innerHTML = nb.recentBooks.map((b) => `
-      <a class="notebook-card" href="weread://reading?bId=${b.bookId}" target="_blank">
+      <div class="notebook-card" data-book-id="${escapeHtml(b.bookId)}" data-book-tab="summary">
         <img src="${escapeHtml(b.cover || "")}" alt="" onerror="this.style.opacity=0.3" />
         <div class="nb-info">
           <div class="nb-title">${escapeHtml(b.title || "")}</div>
           <div class="nb-author">${escapeHtml(b.author || "")}</div>
           <div class="nb-counts">${b.noteCount}笔记 · ${b.bookmarkCount}划线 · ${b.readingProgress}%</div>
         </div>
-      </a>
+      </div>
+    `).join("");
+  }
+
+  // ----- unfinished books -----
+  if (data.unfinishedBooks && data.unfinishedBooks.length) {
+    show($("unfinished-section"));
+    $("unfinished").innerHTML = data.unfinishedBooks.map((b) => `
+      <div class="notebook-card" data-book-id="${escapeHtml(b.bookId)}" data-book-tab="footprint">
+        <img src="${escapeHtml(b.cover || "")}" alt="" onerror="this.style.opacity=0.3" />
+        <div class="nb-info">
+          <div class="nb-title">${escapeHtml(b.title || "")}</div>
+          <div class="nb-author">${escapeHtml(b.author || "")}</div>
+          <div class="nb-counts">${b.progress != null ? b.progress + "%" : "—"} · 上次 ${fmtRelative(b.readUpdateTime)}</div>
+          ${b.readingTime ? `<div class="nb-progress">累计 ${fmtDuration(b.readingTime)}</div>` : ""}
+        </div>
+      </div>
     `).join("");
   }
 
@@ -386,6 +402,121 @@ async function sendChat() {
     c.appendChild(errBox);
   }
 }
+
+// ===== Book detail modal =====
+const bookCache = {};
+
+async function fetchBookEndpoint(kind, bookId) {
+  const key = `${kind}:${bookId}`;
+  if (bookCache[key]) return bookCache[key];
+  const cached = sessionStorage.getItem("wd_book_" + key);
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      bookCache[key] = parsed;
+      return parsed;
+    } catch {}
+  }
+  const base = getApiBase();
+  const res = await fetch(`${base}/api/book/${kind}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bookId }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  bookCache[key] = data;
+  try { sessionStorage.setItem("wd_book_" + key, JSON.stringify(data)); } catch {}
+  return data;
+}
+
+let currentBookId = null;
+let currentBookTab = "summary";
+
+function renderBookBody(text) {
+  const paragraphs = (text || "").split(/\n\s*\n/).filter(Boolean);
+  return paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("");
+}
+
+async function loadBookTab(bookId, tab) {
+  currentBookTab = tab;
+  document.querySelectorAll(".book-tab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === tab);
+  });
+  const body = $("book-modal-body");
+  body.innerHTML = `<div class="loading"><div class="loading-spinner"></div><div>Claude 正在阅读你的划线和想法...</div></div>`;
+  try {
+    const kind = tab === "footprint" ? "footprint" : "summary";
+    const data = await fetchBookEndpoint(kind, bookId);
+    if (bookId !== currentBookId) return; // user navigated away
+    if (data.meta) {
+      // refresh modal header from server meta (in case we opened with stale data)
+      if (data.meta.cover) $("book-modal-cover").src = data.meta.cover;
+      if (data.meta.title) $("book-modal-title").textContent = data.meta.title;
+      if (data.meta.author) $("book-modal-author").textContent = data.meta.author;
+      const stats = [];
+      if (data.meta.bookmarkCount != null) stats.push(`${data.meta.bookmarkCount} 条划线`);
+      if (data.meta.reviewCount != null) stats.push(`${data.meta.reviewCount} 条想法`);
+      if (data.meta.progress != null) stats.push(`${data.meta.progress}%`);
+      $("book-modal-stats").textContent = stats.join(" · ");
+    }
+    body.innerHTML = renderBookBody(data.text);
+  } catch (e) {
+    body.innerHTML = `<div class="error">加载失败: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function openBookModal(bookId, defaultTab = "summary") {
+  if (!bookId) return;
+  currentBookId = bookId;
+  // reset header
+  $("book-modal-cover").src = "";
+  $("book-modal-title").textContent = "加载中...";
+  $("book-modal-author").textContent = "";
+  $("book-modal-stats").textContent = "";
+  $("book-modal-open").href = `weread://reading?bId=${bookId}`;
+  show($("book-modal"));
+  loadBookTab(bookId, defaultTab);
+}
+
+function closeBookModal() {
+  currentBookId = null;
+  hide($("book-modal"));
+}
+
+$("book-modal-close").onclick = closeBookModal;
+$("book-modal").addEventListener("click", (e) => {
+  if (e.target.id === "book-modal") closeBookModal();
+});
+document.querySelectorAll(".book-tab").forEach((btn) => {
+  btn.onclick = () => {
+    if (!currentBookId) return;
+    loadBookTab(currentBookId, btn.dataset.tab);
+  };
+});
+
+// Delegated click handler for any element with data-book-id
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-book-id]");
+  if (!el) return;
+  // Ignore clicks on inner anchor links (e.g., 继续阅读 weread://)
+  if (e.target.tagName === "A") return;
+  const bookId = el.dataset.bookId;
+  const tab = el.dataset.bookTab || "summary";
+  if (bookId) openBookModal(bookId, tab);
+});
+
+// ESC to close any open modal/drawer
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (!$("book-modal").classList.contains("hidden")) closeBookModal();
+    else if (!$("settings-modal").classList.contains("hidden")) closeSettings();
+    else if (!$("chat-drawer").classList.contains("hidden")) closeChat();
+  }
+});
 
 // ===== Refresh =====
 $("refresh-btn").onclick = () => loadDashboard(true);

@@ -62,6 +62,117 @@ async function getApiCatalog(env) {
   return cachedApiCatalog;
 }
 
+function fmtDateUTC(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+async function fetchBookData(env, bookId) {
+  const [info, bookmarks, reviews, progress] = await Promise.all([
+    wereadCall(env, "/book/info", { bookId }),
+    wereadCall(env, "/book/bookmarklist", { bookId }),
+    wereadCall(env, "/review/list/mine", { bookid: bookId, count: 50 }),
+    wereadCall(env, "/book/getprogress", { bookId }),
+  ]);
+  return { info, bookmarks, reviews, progress };
+}
+
+function formatBookContext(book, opts = {}) {
+  const { info, bookmarks, reviews, progress } = book;
+  const chMap = {};
+  for (const c of bookmarks.chapters || []) chMap[c.chapterUid] = c.title;
+
+  const bms = (bookmarks.updated || []).sort(
+    (a, b) => (a.createTime || 0) - (b.createTime || 0),
+  );
+  const revs = (reviews.reviews || [])
+    .map((r) => r.review || r)
+    .sort((a, b) => (a.createTime || 0) - (b.createTime || 0));
+
+  const lines = [];
+  lines.push(`书名: ${info.title || ""}`);
+  lines.push(`作者: ${info.author || ""}`);
+  if (info.category) lines.push(`分类: ${info.category}`);
+  if (info.intro) lines.push(`简介(供你判断书的题材气质): ${info.intro.slice(0, 400).replace(/\s+/g, " ")}`);
+
+  const prog = (progress && progress.book) || progress || {};
+  lines.push("");
+  lines.push("# 阅读状态");
+  if (prog.progress != null) lines.push(`进度: ${prog.progress}%`);
+  if (prog.readingTime)
+    lines.push(`累计停留时长: ${Math.round(prog.readingTime / 60)} 分钟`);
+  if (prog.startReadingTime)
+    lines.push(`首次阅读: ${fmtDateUTC(prog.startReadingTime)}`);
+  if (prog.updateTime) lines.push(`最后活动: ${fmtDateUTC(prog.updateTime)}`);
+  if (prog.summary) lines.push(`最后停留段落: ${prog.summary.slice(0, 80)}`);
+
+  if (bms.length) {
+    lines.push("");
+    lines.push(`# 你的划线 (共 ${bms.length} 条, 按时间从早到晚)`);
+    const limit = opts.maxBookmarks || 80;
+    for (const b of bms.slice(0, limit)) {
+      const date = fmtDateUTC(b.createTime);
+      const ch = chMap[b.chapterUid] || "";
+      lines.push(`[${date}][${ch}] ${(b.markText || "").replace(/\s+/g, " ")}`);
+    }
+    if (bms.length > limit)
+      lines.push(`... (还有 ${bms.length - limit} 条已省略)`);
+  } else {
+    lines.push("");
+    lines.push("# 你的划线: 无");
+  }
+
+  if (revs.length) {
+    lines.push("");
+    lines.push(`# 你的想法/批注 (共 ${revs.length} 条, 按时间从早到晚)`);
+    const limit = opts.maxReviews || 30;
+    for (const r of revs.slice(0, limit)) {
+      const date = fmtDateUTC(r.createTime);
+      const ch = r.chapterTitle || r.chapterName || "";
+      const abs = r.abstract
+        ? `\n  原文: ${r.abstract.slice(0, 200).replace(/\s+/g, " ")}`
+        : "";
+      const content = (r.content || "").replace(/\s+/g, " ");
+      lines.push(`[${date}][${ch}]${abs}\n  你写的: ${content}`);
+    }
+    if (revs.length > limit)
+      lines.push(`... (还有 ${revs.length - limit} 条已省略)`);
+  } else {
+    lines.push("");
+    lines.push("# 你的想法: 无");
+  }
+
+  return lines.join("\n");
+}
+
+async function callClaudeOnce(env, system, userText) {
+  const resp = await fetch(ANTHROPIC_BASE, {
+    method: "POST",
+    headers: {
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 1200,
+      system,
+      messages: [{ role: "user", content: userText }],
+    }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Claude ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+  const data = await resp.json();
+  const text = (data.content || [])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+  return { text, usage: data.usage };
+}
+
 // ---------- /api/dashboard ----------
 
 async function handleDashboard(env) {
@@ -97,21 +208,23 @@ async function handleDashboard(env) {
 
   // Currently reading: most recent unfinished book from shelf
   const shelfBooks = shelf.books || [];
-  const candidates = shelfBooks
+  const unfinishedCandidates = shelfBooks
     .filter((b) => b.readUpdateTime && b.finishReading === 0)
     .sort((a, b) => (b.readUpdateTime || 0) - (a.readUpdateTime || 0));
-  const currentBook = candidates[0] || null;
+  const currentBook = unfinishedCandidates[0] || null;
+  const topUnfinished = unfinishedCandidates.slice(0, 8);
 
-  // Phase 2: depend on currentBook + top notebook
+  // Phase 2: fetch progress for top unfinished books + bookmarklist for top notebook
   const topNotebook = (notebooks.books || [])[0];
-  const [progress, recentBookmarks] = await Promise.all([
-    currentBook
-      ? wereadCall(env, "/book/getprogress", { bookId: currentBook.bookId })
-      : Promise.resolve(null),
+  const [recentBookmarks, ...unfinishedProgresses] = await Promise.all([
     topNotebook
       ? wereadCall(env, "/book/bookmarklist", { bookId: topNotebook.bookId })
       : Promise.resolve(null),
+    ...topUnfinished.map((b) =>
+      wereadCall(env, "/book/getprogress", { bookId: b.bookId }).catch(() => null),
+    ),
   ]);
+  const progress = unfinishedProgresses[0] || null;
 
   return {
     year: currentYear,
@@ -143,13 +256,14 @@ async function handleDashboard(env) {
           cover: currentBook.cover,
           category: currentBook.category,
           readUpdateTime: currentBook.readUpdateTime,
-          progress: progress
+          progress: progress?.book
             ? {
-                progress: progress.progress,
-                readingTime: progress.readingTime,
-                updateTime: progress.updateTime,
-                chapterIdx: progress.chapterIdx,
-                chapterTitle: progress.chapterTitle,
+                progress: progress.book.progress,
+                readingTime: progress.book.readingTime,
+                updateTime: progress.book.updateTime,
+                chapterIdx: progress.book.chapterIdx,
+                chapterTitle: progress.book.summary?.slice(0, 60),
+                startReadingTime: progress.book.startReadingTime,
               }
             : null,
         }
@@ -159,6 +273,21 @@ async function handleDashboard(env) {
       totalAlbums: (shelf.albums || []).length,
       hasMp: !!(shelf.mp && Object.keys(shelf.mp).length),
     },
+    unfinishedBooks: topUnfinished.map((b, i) => {
+      const pb = unfinishedProgresses[i]?.book || {};
+      return {
+        bookId: b.bookId,
+        title: b.title,
+        author: b.author,
+        cover: b.cover,
+        category: b.category,
+        readUpdateTime: b.readUpdateTime,
+        progress: pb.progress ?? null,
+        readingTime: pb.readingTime ?? null,
+        startReadingTime: pb.startReadingTime ?? null,
+        chapterTitle: pb.summary?.slice(0, 60) || null,
+      };
+    }),
     notebooks: {
       totalBookCount: notebooks.totalBookCount,
       totalNoteCount: notebooks.totalNoteCount,
@@ -329,6 +458,97 @@ ${catalog}
   return json({ error: "max tool rounds exceeded", messages: convo }, env, 500, request);
 }
 
+// ---------- /api/book/summary ----------
+
+const BOOK_SUMMARY_SYSTEM = `你是一位文学阅读分析师,从用户在一本书里留下的划线和想法中,提炼一段「你对这本书的理解」。
+
+写作原则:
+- 文风:理性为主底色,允许一丝克制的诗意——像年度阅读报告里那种安静的回望,而非读书笔记
+- 长度:300-500 字,自然分 2-3 段
+- 视角:第二人称("你"),不要写成"该读者"
+- 不要逐条罗列划线原文,而是从划线和想法的"选择"里读出:你被什么打动、关注的主题、思考的脉络
+- 不要总结全书内容,聚焦"你"这一次阅读的私人路径
+- 不要客套话开头("在《xxx》中,你..." 这类),直接进入观察
+- 不要 markdown 标题,只用段落
+- 不要使用大量 emoji,最多 1 个,可省略
+- 如果数据极少(只有 1-2 条划线/想法),坦诚地写——也许这本书只是擦肩而过,不必硬凑`;
+
+async function handleBookSummary(env, request) {
+  const { bookId } = await request.json();
+  if (!bookId) return json({ error: "bookId required" }, env, 400, request);
+
+  const book = await fetchBookData(env, bookId);
+  if (!book.info || book.info.errcode) {
+    return json({ error: "book not found or no access", detail: book.info }, env, 404, request);
+  }
+  const context = formatBookContext(book);
+  const { text, usage } = await callClaudeOnce(env, BOOK_SUMMARY_SYSTEM, context);
+  return json(
+    {
+      text,
+      usage,
+      meta: {
+        title: book.info.title,
+        author: book.info.author,
+        cover: book.info.cover,
+        bookmarkCount: (book.bookmarks.updated || []).length,
+        reviewCount: (book.reviews.reviews || []).length,
+      },
+    },
+    env,
+    200,
+    request,
+  );
+}
+
+// ---------- /api/book/footprint ----------
+
+const BOOK_FOOTPRINT_SYSTEM = `你是一位阅读行为分析师。根据用户对某本书的阅读足迹,简述足迹 + 推测他可能为何停下脚步。
+
+写作原则:
+- 文风:温和、共情、略带文艺,不批判不说教,像朋友在帮你回看一段路
+- 长度:200-400 字,2-3 段
+- 结构建议:
+  - 首段:简述阅读足迹——什么时候第一次翻开、读到了哪里(进度+大致章节)、最后一次留下痕迹是什么时候、相隔多久、累计停留多长
+  - 中段:从数据线索里推测 2-3 种"或许"的停下原因(题材厚重?难度?生活节奏?某个时间点之后断了?某一类划线后突然停止?)——要扣数据,不要泛泛而谈
+  - 收尾:可省略,或一句温和的尾收(如"也许哪天还会重新翻开")
+- 视角:第二人称
+- 不下定论,用"或许"、"可能"、"也许"
+- 不要 markdown 标题
+- 不要 emoji,如果非要 1 个`;
+
+async function handleBookFootprint(env, request) {
+  const { bookId } = await request.json();
+  if (!bookId) return json({ error: "bookId required" }, env, 400, request);
+
+  const book = await fetchBookData(env, bookId);
+  if (!book.info || book.info.errcode) {
+    return json({ error: "book not found or no access", detail: book.info }, env, 404, request);
+  }
+  const context = formatBookContext(book, { maxBookmarks: 60, maxReviews: 20 });
+  const { text, usage } = await callClaudeOnce(env, BOOK_FOOTPRINT_SYSTEM, context);
+  return json(
+    {
+      text,
+      usage,
+      meta: {
+        title: book.info.title,
+        author: book.info.author,
+        cover: book.info.cover,
+        progress: book.progress?.book?.progress,
+        readingTime: book.progress?.book?.readingTime,
+        startReadingTime: book.progress?.book?.startReadingTime,
+        lastActivity: book.progress?.book?.updateTime,
+        bookmarkCount: (book.bookmarks.updated || []).length,
+        reviewCount: (book.reviews.reviews || []).length,
+      },
+    },
+    env,
+    200,
+    request,
+  );
+}
+
 // ---------- main fetch handler ----------
 
 export default {
@@ -346,6 +566,12 @@ export default {
       }
       if (url.pathname === "/api/chat" && request.method === "POST") {
         return await handleChat(env, request);
+      }
+      if (url.pathname === "/api/book/summary" && request.method === "POST") {
+        return await handleBookSummary(env, request);
+      }
+      if (url.pathname === "/api/book/footprint" && request.method === "POST") {
+        return await handleBookFootprint(env, request);
       }
       if (url.pathname === "/" || url.pathname === "/health") {
         return json({ ok: true, service: "weread-dashboard" }, env, 200, request);

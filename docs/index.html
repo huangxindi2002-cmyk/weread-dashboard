@@ -25,6 +25,15 @@
       <p>还没有数据。点击右上角「刷新数据」从微信读书拉取。</p>
     </section>
 
+    <!-- View tabs -->
+    <nav id="view-tabs" class="view-tabs hidden">
+      <button class="view-tab active" data-view="overview">总览</button>
+      <button class="view-tab" data-view="books">全部书籍 <span id="view-books-count" class="muted"></span></button>
+    </nav>
+
+    <!-- ===== View: Overview ===== -->
+    <div id="view-overview" class="view">
+
     <!-- Overview stats -->
     <section id="overview" class="overview hidden">
       <div class="stat-card">
@@ -114,6 +123,31 @@
       <div class="card-header"><h2>偏好阅读分类</h2></div>
       <div id="prefer-category" class="prefer-category"></div>
     </section>
+
+    </div><!-- /view-overview -->
+
+    <!-- ===== View: All books ===== -->
+    <div id="view-books" class="view hidden">
+      <section class="card">
+        <div class="card-header">
+          <h2>书架全部书籍</h2>
+          <span id="books-summary" class="muted"></span>
+        </div>
+        <div class="books-toolbar">
+          <input id="books-search" type="search" placeholder="按书名 / 作者搜索..." autocomplete="off" />
+          <select id="books-filter">
+            <option value="all">全部</option>
+            <option value="finished">已读完</option>
+            <option value="unfinished">未读完</option>
+          </select>
+          <select id="books-sort">
+            <option value="recent">最近阅读</option>
+            <option value="title">书名 A-Z</option>
+          </select>
+        </div>
+        <ol id="books-list" class="books-list"></ol>
+      </section>
+    </div>
   </main>
 
   <!-- Chat fab -->

@@ -272,6 +272,32 @@ async function handleDashboard(env) {
       totalBooks: shelfBooks.length,
       totalAlbums: (shelf.albums || []).length,
       hasMp: !!(shelf.mp && Object.keys(shelf.mp).length),
+      allItems: [
+        ...shelfBooks.map((b) => ({
+          kind: "book",
+          bookId: b.bookId,
+          title: b.title,
+          author: b.author,
+          cover: b.cover,
+          category: b.category,
+          finish: b.finishReading === 1,
+          secret: b.secret === 1,
+          isTop: b.isTop === 1,
+          readUpdateTime: b.readUpdateTime || 0,
+        })),
+        ...(shelf.albums || []).map((a) => ({
+          kind: "album",
+          bookId: a.albumInfo?.albumId,
+          title: a.albumInfo?.name,
+          author: a.albumInfo?.authorName,
+          cover: a.albumInfo?.cover,
+          category: a.albumInfo?.category || "",
+          finish: a.albumInfo?.finish === 1,
+          secret: a.albumInfoExtra?.secret === 1,
+          isTop: a.albumInfoExtra?.isTop === 1,
+          readUpdateTime: a.albumInfoExtra?.lectureReadUpdateTime || 0,
+        })),
+      ].sort((x, y) => (y.readUpdateTime || 0) - (x.readUpdateTime || 0)),
     },
     unfinishedBooks: topUnfinished.map((b, i) => {
       const pb = unfinishedProgresses[i]?.book || {};

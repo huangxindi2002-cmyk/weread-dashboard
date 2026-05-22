@@ -102,7 +102,14 @@ async function loadDashboard(forceRefresh = false) {
 
 function render(data) {
   hide($("empty-state"));
+  show($("view-tabs"));
   $("last-updated").textContent = "上次更新 " + fmtRelative(data.updatedAt / 1000);
+
+  // ----- books tab data -----
+  lastShelf = data.shelf || null;
+  const allItems = (lastShelf && lastShelf.allItems) || [];
+  $("view-books-count").textContent = allItems.length ? `(${allItems.length})` : "";
+  renderBooksList();
 
   // ----- overview -----
   show($("overview"));
@@ -520,6 +527,98 @@ document.addEventListener("keydown", (e) => {
 
 // ===== Refresh =====
 $("refresh-btn").onclick = () => loadDashboard(true);
+
+// ===== View tabs (overview / books) =====
+function switchView(view) {
+  document.querySelectorAll(".view-tab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === view);
+  });
+  $("view-overview").classList.toggle("hidden", view !== "overview");
+  $("view-books").classList.toggle("hidden", view !== "books");
+}
+document.querySelectorAll(".view-tab").forEach((btn) => {
+  btn.onclick = () => switchView(btn.dataset.view);
+});
+
+// ===== All books list =====
+let lastShelf = null;
+
+function renderBooksList() {
+  const items = (lastShelf && lastShelf.allItems) || [];
+  const q = ($("books-search").value || "").trim().toLowerCase();
+  const filter = $("books-filter").value;
+  const sortBy = $("books-sort").value;
+
+  let rows = items.slice();
+  if (filter === "finished") rows = rows.filter((b) => b.finish);
+  else if (filter === "unfinished") rows = rows.filter((b) => !b.finish);
+  if (q) {
+    rows = rows.filter(
+      (b) =>
+        (b.title || "").toLowerCase().includes(q) ||
+        (b.author || "").toLowerCase().includes(q),
+    );
+  }
+  if (sortBy === "title") {
+    rows.sort((a, b) => (a.title || "").localeCompare(b.title || "", "zh"));
+  } else {
+    rows.sort((a, b) => (b.readUpdateTime || 0) - (a.readUpdateTime || 0));
+  }
+
+  const finishedCount = items.filter((b) => b.finish).length;
+  const bookCount = items.filter((b) => b.kind === "book").length;
+  const albumCount = items.filter((b) => b.kind === "album").length;
+  $("books-summary").textContent =
+    `共 ${items.length} 本（电子书 ${bookCount} + 有声书 ${albumCount}），已读完 ${finishedCount} 本` +
+    (q || filter !== "all" ? `，当前筛选 ${rows.length} 本` : "");
+
+  if (!rows.length) {
+    $("books-list").innerHTML = `<li class="books-empty muted">没有匹配的书</li>`;
+    return;
+  }
+
+  $("books-list").innerHTML = rows
+    .map((b, i) => {
+      const tags = [];
+      if (b.kind === "album") tags.push(`<span class="book-tag tag-audio">有声</span>`);
+      if (b.secret) tags.push(`<span class="book-tag tag-secret">私密</span>`);
+      if (b.isTop) tags.push(`<span class="book-tag tag-top">置顶</span>`);
+      if (b.finish) tags.push(`<span class="book-tag tag-finish">✓已读完</span>`);
+      const dataAttrs =
+        b.kind === "book" && b.bookId
+          ? `data-book-id="${escapeHtml(b.bookId)}" data-book-tab="summary"`
+          : "";
+      return `
+        <li class="book-row" ${dataAttrs} ${b.kind === "book" ? 'title="点击查看你对这本书的理解"' : ""}>
+          <span class="book-idx">${i + 1}</span>
+          <img class="book-cover" src="${escapeHtml(b.cover || "")}" alt="" onerror="this.style.opacity=0.2" />
+          <div class="book-main">
+            <div class="book-title">${escapeHtml(b.title || "")}</div>
+            <div class="book-sub">
+              <span>${escapeHtml(b.author || "")}</span>
+              ${b.category ? `<span class="muted">· ${escapeHtml(b.category)}</span>` : ""}
+            </div>
+            <div class="book-tags">${tags.join("")}</div>
+          </div>
+          <div class="book-meta-col">
+            <div class="book-date">${b.readUpdateTime ? fmtDate(b.readUpdateTime) : "—"}</div>
+            ${
+              b.kind === "book" && b.bookId
+                ? `<a class="book-open" href="weread://reading?bId=${escapeHtml(b.bookId)}" target="_blank" onclick="event.stopPropagation()">📖 打开</a>`
+                : ""
+            }
+          </div>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+["books-search", "books-filter", "books-sort"].forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener(el.tagName === "SELECT" ? "change" : "input", renderBooksList);
+});
 
 // ===== Bootstrap =====
 loadDashboard(false);
